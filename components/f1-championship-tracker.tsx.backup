@@ -1,0 +1,595 @@
+"use client";
+
+import {
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+  ReferenceLine,
+  CartesianGrid,
+} from "recharts";
+import { idealScenario, driverColors, driverAvatars } from "@/lib/constants";
+import type { DriverData, F1ApiResponse } from "@/types/f1";
+
+interface DriverData {
+  driverId: string;
+  name: string;
+  currentPoints: number;
+  position: number;
+  racePoints: RacePoint[];
+}
+
+interface F1ApiResponse {
+  currentRound: number;
+  drivers: DriverData[];
+  lastUpdate: string;
+  schedule?: Array<{
+    round: string;
+    raceName: string;
+    date: string;
+    Sprint?: {
+      date: string;
+      time: string;
+    };
+  }>;
+  completedRounds?: number;
+  totalRounds?: number;
+  remainingEvents?: number;
+  remainingRaces?: number;
+  remainingSprints?: number;
+  sprintRounds?: number[];
+}
+
+
+const driverColors: Record<string, string> = {
+  piastri: "#FF8700",
+  norris: "#FFB347",
+  verstappen: "#3671C6",
+};
+
+const driverAvatars: Record<string, string> = {
+  norris: "/Lando.png",
+  piastri: "/Oscar.png",
+  max_verstappen: "/Max.png",
+  verstappen: "/Max.png",
+};
+
+const CustomTooltip = ({ active, payload }: any) => {
+  if (active && payload && payload.length) {
+    const raceData = payload[0].payload;
+
+    const drivers = ["norris", "piastri", "verstappen"];
+    const driverDisplayNames: Record<string, string> = {
+      norris: "Lando Norris",
+      piastri: "Oscar Piastri",
+      verstappen: "Max Verstappen",
+    };
+
+    return (
+      <div className="bg-[#0a0a0a]/95 backdrop-blur-md rounded-lg p-4 shadow-2xl border border-white/10 min-w-[240px]">
+        <p className="font-mono text-xs mb-3 text-white/90 font-semibold">
+          {raceData.raceName}
+        </p>
+        <div className="space-y-3">
+          {drivers.map((driver) => {
+            const actual = raceData[`${driver}Actual`];
+            const required = raceData[`${driver}Required`];
+            const color = driverColors[driver];
+
+            if (actual === null && required === null) return null;
+
+            return (
+              <div key={driver} className="space-y-1">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <div
+                    className="w-2 h-2 rounded-full"
+                    style={{ backgroundColor: color }}
+                  />
+                  <span className="text-white/90 font-medium text-xs">
+                    {driverDisplayNames[driver]}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-4 pl-4">
+                  <span className="text-white/50 text-[10px] font-mono">
+                    Actual
+                  </span>
+                  <span className="font-mono text-white/90 text-xs font-semibold">
+                    {actual !== null && actual !== undefined
+                      ? Math.round(actual)
+                      : "—"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-4 pl-4">
+                  <span className="text-white/50 text-[10px] font-mono">
+                    Target
+                  </span>
+                  <span className="font-mono text-white/50 text-xs">
+                    {required !== null && required !== undefined
+                      ? Math.round(required)
+                      : "—"}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+  return null;
+};
+
+export default function F1ChampionshipTracker({
+  initialData,
+}: F1ChampionshipTrackerProps) {
+  const f1Data = initialData;
+
+  const lastCompletedRace =
+    f1Data?.drivers[0]?.racePoints?.[f1Data.drivers[0].racePoints.length - 1]
+      ?.raceName || "USA";
+  const remainingEvents =
+    f1Data?.remainingEvents ??
+    idealScenario.races.length - idealScenario.completedRaces;
+  const remainingRaces = f1Data?.remainingRaces ?? 5;
+  const remainingSprints = f1Data?.remainingSprints ?? 2;
+
+  const calculateChartData = () => {
+    const data: any[] = [];
+    const driverIds = ["norris", "piastri", "verstappen"];
+
+    idealScenario.races.forEach((raceName, index) => {
+      const isCompleted = index < idealScenario.completedRaces;
+
+      const dataPoint: any = {
+        race: raceName,
+        raceName: raceName,
+        round: index + 1,
+        isFuture: !isCompleted,
+      };
+
+      driverIds.forEach((driverId) => {
+        const currentPoints =
+          idealScenario.currentPoints[
+            driverId as keyof typeof idealScenario.currentPoints
+          ];
+        const requiredPointsArray =
+          idealScenario.requiredPoints[
+            driverId as keyof typeof idealScenario.requiredPoints
+          ];
+        const actualPointsArray =
+          idealScenario.actualPoints[
+            driverId as keyof typeof idealScenario.actualPoints
+          ];
+
+        // Calculate cumulative ideal points up to this race
+        const cumulativeRequired = requiredPointsArray
+          .slice(0, index + 1)
+          .reduce((sum, pts) => sum + pts, 0);
+        const totalIdealPoints = currentPoints + cumulativeRequired;
+
+        // Calculate cumulative actual points up to this race
+        const cumulativeActual = actualPointsArray
+          .slice(0, index + 1)
+          .reduce((sum, pts) => sum + pts, 0);
+        const totalActualPoints = currentPoints + cumulativeActual;
+
+        // Show ideal scenario (dotted line) for all races
+        dataPoint[`${driverId}Required`] = totalIdealPoints;
+
+        // Show actual points for completed races only
+        if (isCompleted) {
+          dataPoint[`${driverId}Actual`] = totalActualPoints;
+        }
+      });
+
+      data.push(dataPoint);
+    });
+
+    console.log("[v0] Chart data calculated:", data);
+    return data;
+  };
+
+  const chartData = calculateChartData();
+
+  const driversWithScenarios = [
+    {
+      driverId: "norris",
+      name: "Lando Norris",
+      currentPoints: idealScenario.currentPoints.norris,
+      position: 1,
+      targetPoints: idealScenario.finalPoints.norris,
+    },
+    {
+      driverId: "piastri",
+      name: "Oscar Piastri",
+      currentPoints: idealScenario.currentPoints.piastri,
+      position: 2,
+      targetPoints: idealScenario.finalPoints.piastri,
+    },
+    {
+      driverId: "verstappen",
+      name: "Max Verstappen",
+      currentPoints: idealScenario.currentPoints.verstappen,
+      position: 3,
+      targetPoints: idealScenario.finalPoints.verstappen,
+    },
+  ]
+    .map((driver) => {
+      const currentActual =
+        f1Data?.drivers?.find((d) =>
+          d.name
+            .toLowerCase()
+            .includes(driver.name.toLowerCase().split(" ")[1]),
+        )?.currentPoints || driver.currentPoints;
+
+      return {
+        ...driver,
+        actualPoints: currentActual,
+      };
+    })
+    .map((driver) => {
+      if (driver.targetPoints) {
+        const pointsNeeded = driver.targetPoints - driver.currentPoints;
+        const remainingRaces =
+          idealScenario.races.length - idealScenario.completedRaces;
+        const avgPointsNeeded = Math.ceil(pointsNeeded / remainingRaces);
+
+        return {
+          ...driver,
+          pointsNeeded,
+          avgPointsNeeded,
+        };
+      }
+
+      return {
+        ...driver,
+        pointsNeeded: null,
+        avgPointsNeeded: null,
+      };
+    })
+    .map((driver) => {
+      const currentActual =
+        f1Data?.drivers?.find((d) =>
+          d.name
+            .toLowerCase()
+            .includes(driver.name.toLowerCase().split(" ")[1]),
+        )?.currentPoints || driver.currentPoints;
+
+      return {
+        ...driver,
+        actualPoints: currentActual,
+      };
+    })
+    .sort((a, b) => b.actualPoints - a.actualPoints)
+    .map((driver, index) => ({
+      ...driver,
+      position: index + 1,
+    }));
+
+  const minPoints =
+    Math.min(...Object.values(idealScenario.currentPoints)) - 20;
+  const maxPoints =
+    Math.max(
+      idealScenario.finalPoints.norris,
+      idealScenario.finalPoints.piastri,
+      idealScenario.finalPoints.verstappen,
+    ) + 20;
+  const wdcWinnerThreshold = Math.max(
+    idealScenario.finalPoints.norris,
+    idealScenario.finalPoints.piastri,
+    idealScenario.finalPoints.verstappen,
+  );
+
+  return (
+    <div className="bg-[#0a0a0a] grid-pattern flex flex-col items-center justify-start p-4 md:p-6 h-screen overflow-hidden border-0">
+      <div className="w-full mb-4">
+        <div className="flex flex-col items-center gap-3 mb-4">
+          <div className="text-center">
+            <h1 className="text-lg md:text-xl font-mono font-bold text-white mb-1 uppercase">
+              CAN MAX VERSTAPPEN STILL WIN THE WDC?
+            </h1>
+            <p className="text-xs text-white/40 font-mono">
+              After {idealScenario.races[idealScenario.completedRaces - 1]} •{" "}
+              {idealScenario.races.length - idealScenario.completedRaces} events
+              remaining ({idealScenario.races.slice(idealScenario.completedRaces).filter(r => !r.includes('S')).length} Races, {idealScenario.races.slice(idealScenario.completedRaces).filter(r => r.includes('S')).length} Sprints)
+            </p>
+          </div>
+        </div>
+      </div>
+      <div className="w-full flex-1 grid grid-rows-1 lg:grid-cols-12 gap-4">
+        <div
+          className="lg:col-span-8 bg-[#0a0a0a] backdrop-blur-sm rounded-none p-4 md:p-6 overflow-hidden border border-neutral-800"
+          style={{ minHeight: "min(70dvh, 560px)" }}
+        >
+          <ResponsiveContainer
+            width="100%"
+            height="100%"
+            initialDimension={{ width: 800, height: 500 }}
+          >
+            <LineChart
+              data={chartData}
+              margin={{ top: 20, right: 20, left: 0, bottom: 60 }}
+            >
+              <CartesianGrid
+                strokeDasharray="3 3"
+                stroke="rgba(255,255,255,0.05)"
+                vertical={false}
+              />
+
+              <XAxis
+                dataKey="race"
+                stroke="rgba(255,255,255,0.1)"
+                tick={{
+                  fill: "rgba(255,255,255,0.4)",
+                  fontSize: 11,
+                  fontFamily: "monospace",
+                }}
+                tickLine={false}
+                axisLine={{ stroke: "rgba(255,255,255,0.05)" }}
+                angle={-45}
+                textAnchor="end"
+                height={60}
+              />
+
+              <YAxis
+                stroke="rgba(255,255,255,0.1)"
+                tick={{
+                  fill: "rgba(255,255,255,0.4)",
+                  fontSize: 11,
+                  fontFamily: "monospace",
+                }}
+                tickLine={false}
+                axisLine={{ stroke: "rgba(255,255,255,0.05)" }}
+                domain={[minPoints, maxPoints]}
+                label={{
+                  value: "Points",
+                  angle: -90,
+                  position: "insideLeft",
+                  style: {
+                    fill: "rgba(255,255,255,0.4)",
+                    fontSize: 11,
+                    fontFamily: "monospace",
+                  },
+                }}
+              />
+
+              <Tooltip
+                content={<CustomTooltip />}
+                wrapperStyle={{ outline: "none" }}
+                cursor={false}
+              />
+
+              <ReferenceLine
+                y={wdcWinnerThreshold}
+                stroke="#ef4444"
+                strokeDasharray="6 4"
+                strokeWidth={2}
+                label={{
+                  value: "WDC Winner",
+                  fill: "#ef4444",
+                  fontSize: 12,
+                  fontFamily: "monospace",
+                  position: "top",
+                  fontWeight: "600",
+                }}
+              />
+
+              <ReferenceLine
+                y={454}
+                stroke="transparent"
+                strokeWidth={0}
+                label={{
+                  value: "454",
+                  fill: "rgba(255,255,255,0.4)",
+                  fontSize: 10,
+                  fontFamily: "monospace",
+                  position: "left",
+                }}
+              />
+
+              <ReferenceLine
+                x="USA"
+                stroke="rgba(255,255,255,0.2)"
+                strokeDasharray="2 2"
+                strokeWidth={1}
+                label={{
+                  value: "Now",
+                  fill: "rgba(255,255,255,0.5)",
+                  fontSize: 10,
+                  fontFamily: "monospace",
+                  position: "top",
+                }}
+              />
+
+              {driversWithScenarios.slice(0, 2).map((driver, index) => {
+                const color = driverColors[driver.driverId] || "#a1a1aa";
+
+                return (
+                  <Line
+                    key={`actual-${index}`}
+                    type="monotone"
+                    dataKey={`${driver.driverId}Actual`}
+                    name={`${driver.name}`}
+                    stroke={color}
+                    strokeWidth={3}
+                    dot={{
+                      fill: color,
+                      strokeWidth: 0,
+                      r: 3,
+                    }}
+                    activeDot={{
+                      r: 6,
+                      fill: color,
+                      strokeWidth: 0,
+                    }}
+                    connectNulls={false}
+                  />
+                );
+              })}
+
+              <Line
+                type="monotone"
+                dataKey="verstappenActual"
+                name="Max Verstappen"
+                stroke={driverColors.verstappen}
+                strokeWidth={3}
+                dot={{
+                  fill: driverColors.verstappen,
+                  strokeWidth: 0,
+                  r: 4,
+                }}
+                isAnimationActive={false}
+                connectNulls={false}
+              />
+
+              {driversWithScenarios.map((driver, index) => {
+                const color = driverColors[driver.driverId] || "#a1a1aa";
+
+                return (
+                  <Line
+                    key={`required-${index}`}
+                    type="monotone"
+                    dataKey={`${driver.driverId}Required`}
+                    name={`${driver.name} (Required)`}
+                    stroke={color}
+                    strokeWidth={2}
+                    strokeDasharray="6 4"
+                    dot={false}
+                    strokeOpacity={0.6}
+                    connectNulls={true}
+                  />
+                );
+              })}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+
+        <aside className="lg:col-span-4 bg-[#0a0a0a] backdrop-blur-sm rounded-none p-6 flex flex-col gap-0 border border-neutral-800 overflow-hidden relative">
+          <div className="absolute top-2 left-2 text-neutral-700 text-xs font-mono">
+            +
+          </div>
+          <div className="absolute top-2 right-2 text-neutral-700 text-xs font-mono">
+            +
+          </div>
+          <div className="absolute bottom-2 left-2 text-neutral-700 text-xs font-mono">
+            +
+          </div>
+          <div className="absolute bottom-2 right-2 text-neutral-700 text-xs font-mono">
+            +
+          </div>
+
+          <div className="mb-6 mt-4">
+            <h2 className="text-white text-xs font-mono mb-3 tracking-wide uppercase">
+              Championship Standings
+            </h2>
+            <div className="flex items-center gap-4 text-[10px]">
+              <div className="flex items-center gap-2">
+                <div className="w-5 h-[2px] bg-white" />
+                <span className="text-white/60 font-mono">Actual</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-5 h-[2px] border-t-2 border-dashed border-white/60" />
+                <span className="text-white/60 font-mono">Target</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-0 relative">
+            {driversWithScenarios.map((driver, index) => {
+              const color = driverColors[driver.driverId] || "#a1a1aa";
+              const currentActual =
+                f1Data?.drivers?.find((d: DriverData) =>
+                  d.name
+                    .toLowerCase()
+                    .includes(driver.name.toLowerCase().split(" ")[1]),
+                )?.currentPoints || driver.currentPoints;
+
+              const driverKey =
+                driver.driverId as keyof typeof idealScenario.actualPoints;
+              const completedPoints = idealScenario.actualPoints[
+                driverKey
+              ].slice(0, idealScenario.completedRaces);
+              const recentForm = completedPoints.slice(-5);
+              const recentRaces = idealScenario.races.slice(
+                Math.max(0, idealScenario.completedRaces - 5),
+                idealScenario.completedRaces,
+              );
+
+              const maxPoints = 26;
+
+              return (
+                <div
+                  key={index}
+                  className="bg-white/2 rounded-none p-5 flex items-center gap-4 border-b border-white/5 last:border-b-0 hover:bg-white/4 transition-all"
+                >
+                  <div className="relative shrink-0">
+                    <div
+                      className="w-16 h-16 rounded-none border"
+                      style={{ borderColor: color, borderWidth: "2px" }}
+                    >
+                      <img
+                        src={driverAvatars[driver.driverId]}
+                        alt={driver.name}
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                    <div className="absolute -top-1 -left-1 bg-[#0a0a0a] rounded-none px-1.5 py-0.5 border border-white/10">
+                      <span className="text-[9px] font-mono font-bold text-white/70">
+                        P{driver.position}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="mb-2">
+                      <span className="text-white font-mono text-xs tracking-tight font-medium block">
+                        {driver.name}
+                      </span>
+                    </div>
+                    <div className="space-y-0.5">
+                      <div className="flex items-center justify-between text-[10px]">
+                        <span className="text-white/50 font-mono">Current</span>
+                        <span className="text-white font-mono font-semibold">
+                          {currentActual} pts
+                        </span>
+                      </div>
+                      {driver.targetPoints && (
+                        <div className="flex items-center justify-between text-[10px]">
+                          <span className="text-white/40 font-mono">
+                            Target
+                          </span>
+                          <span className="text-white/60 font-mono">
+                            {driver.targetPoints} pts
+                          </span>
+                        </div>
+                      )}
+                      {recentForm.length > 0 && (
+                        <div className="flex items-center justify-between text-[10px] mt-2">
+                          <span className="text-white/40 font-mono">Form</span>
+                          <div className="flex gap-0.5">
+                            {recentForm.map((points, i) => {
+                              const opacity = points / maxPoints;
+                              return (
+                                <div
+                                  key={i}
+                                  className="w-1 h-3 bg-white rounded-none"
+                                  style={{ opacity: Math.max(opacity, 0.15) }}
+                                  title={`${recentRaces[i] || `Race ${i + 1}`}: ${points} pts`}
+                                />
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </aside>
+      </div>
+    </div>
+  );
+}
